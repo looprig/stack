@@ -1,6 +1,8 @@
 package stack
 
 import (
+	"context"
+	"log/slog"
 	"net"
 	"path/filepath"
 	"strconv"
@@ -49,7 +51,7 @@ func Validate(o Options) error {
 	if err := validateTenants("Tenants", o.Tenants); err != nil {
 		return err
 	}
-	if err := validateIdentity(o.Identity, o.Origins, o.Logger != nil); err != nil {
+	if err := validateIdentity(o.Identity, o.Origins, o.AllowDevelopmentIdentity, o.Logger); err != nil {
 		return err
 	}
 	if err := validateAgents(o.Agents); err != nil {
@@ -123,13 +125,18 @@ func validateStorage(s Storage) error {
 		{"Leaser", s.Control.Leaser != nil},
 		{"KV", s.Control.KV != nil},
 		{"Blobs", s.Control.Blobs != nil},
+		{"OrderedIndex", s.Control.OrderedIndex != nil},
 	} {
 		if !primitive.present {
 			return refuse("Storage.Control."+primitive.name, "is required")
 		}
 	}
-	if _, ok := s.Control.Blobs.(storage.BlobReaderLifecycle); !ok {
+	lifecycle, ok := s.Control.Blobs.(storage.BlobReaderLifecycle)
+	if !ok {
 		return refuse("Storage.Control.Blobs", "does not implement storage.BlobReaderLifecycle, which SessionStore requires; a single-host filesystem store is adapted with (*storage.Composite).WithBoundedBlobReaders, which stack/localdisk does for you")
+	}
+	if bound := lifecycle.BlobReaderCloseBound(); bound <= 0 {
+		return refuse("Storage.Control.Blobs", "declares a reader close bound of "+bound.String()+"; SessionStore requires a positive one")
 	}
 	if s.Journal == nil {
 		return refuse("Storage.Journal", "is required")
@@ -169,7 +176,7 @@ func validateTenants(field string, tenants []sessionwire.TenantID) error {
 	return nil
 }
 
-func validateIdentity(id Identity, origins []string, hasLogger bool) error {
+func validateIdentity(id Identity, origins []string, allowDevelopment bool, logger *slog.Logger) error {
 	if id.Verifier == nil {
 		return refuse("Identity.Verifier", "is required")
 	}
@@ -191,8 +198,13 @@ func validateIdentity(id Identity, origins []string, hasLogger bool) error {
 	if err := csrfConfig(id, origins).Validate(); err != nil {
 		return refuseCause("Origins", "are not usable trusted origins", err)
 	}
-	if id.DevelopmentOnly && !hasLogger {
-		return refuse("Logger", "is required with a development identity, so its banner is never discarded")
+	if id.DevelopmentOnly {
+		if !allowDevelopment {
+			return refuse("AllowDevelopmentIdentity", "must be set to run a development identity (stack/devauth); it is never enabled implicitly")
+		}
+		if logger == nil || !logger.Handler().Enabled(context.Background(), slog.LevelWarn) {
+			return refuse("Logger", "must be set and enabled at WARN with a development identity, so its banner is never discarded")
+		}
 	}
 	return nil
 }
@@ -307,8 +319,36 @@ func validateLive(live *host.LiveTextOptions) error {
 			return refuse(value.field, "must not be negative")
 		}
 	}
+	// Host's HostLink transport rules (host/internal/realtime/hostlink),
+	// restated so they refuse before any I/O: a burst must admit one maximum
+	// frame, and burst plus thirty seconds of rate must fit a client queue.
+	rate, burst := live.RateBytesPerSecond, live.BurstBytes
+	if rate == 0 {
+		rate = liveDefaultRateBytesPerSecond
+	}
+	if burst == 0 {
+		burst = liveDefaultBurstBytes
+	}
+	if burst < liveMaxFrameBytes {
+		return refuse("Live.BurstBytes", "is "+strconv.Itoa(burst)+"; it must admit one maximum "+strconv.Itoa(liveMaxFrameBytes)+"-byte frame")
+	}
+	if burst >= liveClientQueueBytes || rate > (liveClientQueueBytes-1-burst)/30 {
+		field := "Live.RateBytesPerSecond"
+		if live.RateBytesPerSecond == 0 {
+			field = "Live.BurstBytes"
+		}
+		return refuse(field, "is too large: burst + rate × 30 seconds must stay below the 1 MiB client queue")
+	}
 	return nil
 }
+
+// Host's live-transport constants (host/internal/realtime/hostlink v0.16.0).
+const (
+	liveDefaultRateBytesPerSecond = 32 << 10
+	liveDefaultBurstBytes         = 8 << 10
+	liveMaxFrameBytes             = 4 << 10
+	liveClientQueueBytes          = 1 << 20
+)
 
 func validateHostLimits(field string, raw HostLimits) error {
 	for _, value := range []struct {
@@ -326,10 +366,27 @@ func validateHostLimits(field string, raw HostLimits) error {
 		{"CompatibilityTimeout", raw.CompatibilityTimeout < 0},
 		{"WorkPoll", raw.WorkPoll < 0},
 		{"MaxCommandBodyBytes", raw.MaxCommandBodyBytes < 0},
+		{"Link.PingInterval", raw.Link.PingInterval < 0},
+		{"Link.PongTimeout", raw.Link.PongTimeout < 0},
+		{"Link.MaxBindingsPerLink", raw.Link.MaxBindingsPerLink < 0},
+		{"Link.MaxBindings", raw.Link.MaxBindings < 0},
+		{"Link.MaxTenantLinks", raw.Link.MaxTenantLinks < 0},
+		{"Drain.Grace", raw.Drain.Grace < 0},
+		{"Drain.IdleBoundary", raw.Drain.IdleBoundary < 0},
+		{"Drain.PublishBound", raw.Drain.PublishBound < 0},
 	} {
 		if value.negative {
 			return refuse(field+"."+value.name, "must not be negative")
 		}
+	}
+	if (raw.Link.PingInterval == 0) != (raw.Link.PongTimeout == 0) {
+		return refuse(field+".Link.PongTimeout", "and Link.PingInterval must be set together")
+	}
+	if p := raw.Link.PingInterval; p > 0 && p < time.Second {
+		return refuse(field+".Link.PingInterval", "must be at least one second (the wire carries whole seconds)")
+	}
+	if p, q := raw.Link.PingInterval, raw.Link.PongTimeout; p > 0 && q >= p {
+		return refuse(field+".Link.PongTimeout", "must be shorter than Link.PingInterval")
 	}
 	l := raw.resolved()
 	if l.RegistryExpiry < l.RegistryHeartbeat*host.MinHeartbeatsBeforeExpiry {

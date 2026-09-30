@@ -57,8 +57,13 @@ type Options struct {
 
 	// Logger receives operator diagnostics. Optional, except that a
 	// development identity (Identity.DevelopmentOnly) refuses to start
-	// without one, so its banner cannot be discarded.
+	// without one that is enabled at WARN, so its banner cannot be discarded.
 	Logger *slog.Logger
+
+	// AllowDevelopmentIdentity is the explicit opt-in a development identity
+	// (stack/devauth) requires. Without it Validate refuses such an identity,
+	// so development credentials are never enabled by a dependency alone.
+	AllowDevelopmentIdentity bool
 
 	// Limits tunes timings and bounds. Its zero value is the single-process
 	// default.
@@ -114,8 +119,9 @@ type Identity struct {
 	CookieName string
 
 	// DevelopmentOnly marks a development identity (stack/devauth sets it).
-	// Validate then requires Options.Logger, and Start logs a WARN banner on
-	// every start saying this process accepts development credentials.
+	// Validate then requires Options.AllowDevelopmentIdentity and an
+	// Options.Logger enabled at WARN, and Start logs a WARN banner on every
+	// start saying this process accepts development credentials.
 	DevelopmentOnly bool
 }
 

@@ -76,8 +76,14 @@ func TestIdentityIsMarkedAndStartsOnlyWithALogger(t *testing.T) {
 	if err := stack.Validate(full); !errors.As(err, &refusal) || refusal.Field != "Logger" {
 		t.Fatalf("Validate(dev identity, no logger) = %v, want a Logger refusal", err)
 	}
-	if err := stack.Validate(validWith(t, id, slog.New(slog.NewTextHandler(io.Discard, nil)))); err != nil {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := stack.Validate(validWith(t, id, logger)); err != nil {
 		t.Fatalf("Validate(dev identity, logger) = %v", err)
+	}
+	withoutOptIn := validWith(t, id, logger)
+	withoutOptIn.AllowDevelopmentIdentity = false
+	if err := stack.Validate(withoutOptIn); !errors.As(err, &refusal) || refusal.Field != "AllowDevelopmentIdentity" {
+		t.Fatalf("Validate(dev identity, no opt-in) = %v, want an AllowDevelopmentIdentity refusal", err)
 	}
 }
 

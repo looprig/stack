@@ -100,6 +100,8 @@ func options(t *testing.T, store stack.Storage, client inference.Client) stack.O
 		Live:     &host.LiveTextOptions{IncludeReasoning: true, IncludeToolSteps: true},
 		Origins:  []string{"http://127.0.0.1"},
 		Logger:   testLogger(),
+		// devauth is a development identity: the opt-in is explicit.
+		AllowDevelopmentIdentity: true,
 	}
 }
 

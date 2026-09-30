@@ -56,6 +56,11 @@ type blobsOnly struct{ storage.Blobs }
 
 type otherMode struct{ InProcess }
 
+// zeroBound is a lifecycle provider declaring a zero close bound.
+type zeroBound struct{ storage.Blobs }
+
+func (zeroBound) BlobReaderCloseBound() time.Duration { return 0 }
+
 func TestValidateAcceptsTheBaselineAndBoundaries(t *testing.T) {
 	for name, edit := range map[string]func(*Options){
 		"baseline":         func(*Options) {},
@@ -72,7 +77,12 @@ func TestValidateAcceptsTheBaselineAndBoundaries(t *testing.T) {
 		},
 		"dev identity with logger": func(o *Options) {
 			o.Identity.DevelopmentOnly = true
+			o.AllowDevelopmentIdentity = true
 			o.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+		},
+		"live burst of one frame": func(o *Options) { o.Live = &host.LiveTextOptions{BurstBytes: 4 << 10} },
+		"link heartbeat": func(o *Options) {
+			o.Limits.Host.Link.PingInterval, o.Limits.Host.Link.PongTimeout = 2*time.Second, time.Second
 		},
 		"expiry exactly the heartbeat margin": func(o *Options) {
 			o.Limits.Host.RegistryHeartbeat = time.Second
@@ -108,6 +118,12 @@ func TestValidateRefusals(t *testing.T) {
 		{"no control", "Storage.Control", func(o *Options) { o.Storage.Control = nil }},
 		{"no control KV", "Storage.Control.KV", func(o *Options) { o.Storage.Control.KV = nil }},
 		{"no control ledger", "Storage.Control.Ledger", func(o *Options) { o.Storage.Control.Ledger = nil }},
+		{"no control leaser", "Storage.Control.Leaser", func(o *Options) { o.Storage.Control.Leaser = nil }},
+		{"no control blobs", "Storage.Control.Blobs", func(o *Options) { o.Storage.Control.Blobs = nil }},
+		{"no control ordered index", "Storage.Control.OrderedIndex", func(o *Options) { o.Storage.Control.OrderedIndex = nil }},
+		{"non-positive close bound", "Storage.Control.Blobs", func(o *Options) {
+			o.Storage.Control.Blobs = zeroBound{o.Storage.Control.Blobs}
+		}},
 		{"unbounded blobs", "Storage.Control.Blobs", func(o *Options) {
 			o.Storage.Control.Blobs = blobsOnly{o.Storage.Control.Blobs}
 		}},
@@ -132,7 +148,21 @@ func TestValidateRefusals(t *testing.T) {
 		{"duplicate origin", "Origins", func(o *Options) {
 			o.Origins = []string{"http://127.0.0.1:8080", "http://127.0.0.1:8080"}
 		}},
-		{"dev identity without logger", "Logger", func(o *Options) { o.Identity.DevelopmentOnly = true }},
+		{"dev identity without opt-in", "AllowDevelopmentIdentity", func(o *Options) {
+			o.Identity.DevelopmentOnly = true
+			o.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+		}},
+		{"dev identity without logger", "Logger", func(o *Options) {
+			o.Identity.DevelopmentOnly, o.AllowDevelopmentIdentity = true, true
+		}},
+		{"dev identity with an error-level logger", "Logger", func(o *Options) {
+			o.Identity.DevelopmentOnly, o.AllowDevelopmentIdentity = true, true
+			o.Logger = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
+		}},
+		{"dev identity with a discarding logger", "Logger", func(o *Options) {
+			o.Identity.DevelopmentOnly, o.AllowDevelopmentIdentity = true, true
+			o.Logger = slog.New(slog.DiscardHandler)
+		}},
 		{"no agents", "Agents", func(o *Options) { o.Agents = nil }},
 		{"empty agent id", "Agents[0].ID", func(o *Options) { o.Agents[0].ID = "" }},
 		{"duplicate agent", "Agents[1].ID", func(o *Options) {
@@ -172,6 +202,26 @@ func TestValidateRefusals(t *testing.T) {
 			o.Live = &host.LiveTextOptions{RateBytesPerSecond: -1}
 		}},
 		{"negative live flush", "Live.FlushInterval", func(o *Options) { o.Live = &host.LiveTextOptions{FlushInterval: -1} }},
+		{"live burst below one frame", "Live.BurstBytes", func(o *Options) { o.Live = &host.LiveTextOptions{BurstBytes: 1} }},
+		{"live burst over the queue", "Live.BurstBytes", func(o *Options) { o.Live = &host.LiveTextOptions{BurstBytes: 1 << 20} }},
+		{"live rate over the queue", "Live.RateBytesPerSecond", func(o *Options) {
+			o.Live = &host.LiveTextOptions{RateBytesPerSecond: 1 << 20}
+		}},
+		{"negative max bindings", "Limits.Host.Link.MaxBindings", func(o *Options) { o.Limits.Host.Link.MaxBindings = -1 }},
+		{"negative bindings per link", "Limits.Host.Link.MaxBindingsPerLink", func(o *Options) {
+			o.Limits.Host.Link.MaxBindingsPerLink = -1
+		}},
+		{"negative tenant links", "Limits.Host.Link.MaxTenantLinks", func(o *Options) { o.Limits.Host.Link.MaxTenantLinks = -1 }},
+		{"ping without pong", "Limits.Host.Link.PongTimeout", func(o *Options) { o.Limits.Host.Link.PingInterval = 2 * time.Second }},
+		{"sub-second ping", "Limits.Host.Link.PingInterval", func(o *Options) {
+			o.Limits.Host.Link.PingInterval, o.Limits.Host.Link.PongTimeout = 500*time.Millisecond, 100*time.Millisecond
+		}},
+		{"pong not below ping", "Limits.Host.Link.PongTimeout", func(o *Options) {
+			o.Limits.Host.Link.PingInterval, o.Limits.Host.Link.PongTimeout = 2*time.Second, 2*time.Second
+		}},
+		{"negative drain grace", "Limits.Host.Drain.Grace", func(o *Options) { o.Limits.Host.Drain.Grace = -1 }},
+		{"negative idle boundary", "Limits.Host.Drain.IdleBoundary", func(o *Options) { o.Limits.Host.Drain.IdleBoundary = -1 }},
+		{"negative publish bound", "Limits.Host.Drain.PublishBound", func(o *Options) { o.Limits.Host.Drain.PublishBound = -1 }},
 		{"negative warm ttl", "Limits.Host.WarmTTL", func(o *Options) { o.Limits.Host.WarmTTL = -1 }},
 		{"expiry below heartbeat margin", "Limits.Host.RegistryExpiry", func(o *Options) {
 			o.Limits.Host.RegistryHeartbeat = time.Second

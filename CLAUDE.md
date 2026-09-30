@@ -30,7 +30,9 @@ cannot live in either.
   listener → stores → `Storage.Close`. `TestStopRunsTheSafeOrder` holds it.
 - The journal binding, templates, evidence router and resolvers derive from
   one source. Do not add an option that lets two of them disagree.
-- `devauth` stays loudly development-only (`Identity.DevelopmentOnly`).
+- `devauth` stays loudly development-only: `Identity.DevelopmentOnly`
+  requires `Options.AllowDevelopmentIdentity` and a WARN-enabled Logger.
+  Examples never print a credential.
 
 ## Testing
 

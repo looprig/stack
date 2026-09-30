@@ -29,5 +29,7 @@ func validWith(t *testing.T, id stack.Identity, logger *slog.Logger) stack.Optio
 		}},
 		Origins: []string{"http://127.0.0.1"},
 		Logger:  logger,
+		// The opt-in is set here so the Logger rule is what each case meets.
+		AllowDevelopmentIdentity: true,
 	}
 }

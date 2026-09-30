@@ -66,6 +66,8 @@ func Start(ctx context.Context, cfg Config) (*stack.Stack, *devauth.Dev, error) 
 		UI:      dev.Routes(homePage()),
 		Origins: cfg.Origins,
 		Logger:  cfg.Logger,
+		// devauth is development-only; this opt-in is what allows it.
+		AllowDevelopmentIdentity: true,
 	})
 	return app, dev, err
 }

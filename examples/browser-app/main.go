@@ -66,9 +66,20 @@ func run() error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.ListenAndServe() }()
 
+	// The dev token is a credential, so it is never printed. Set
+	// LOOPRIG_DEV_TOKEN to choose it; otherwise the minted one is written to
+	// a 0600 file in the data directory.
+	whereToFind := "$LOOPRIG_DEV_TOKEN"
+	if os.Getenv("LOOPRIG_DEV_TOKEN") == "" {
+		tokenFile := filepath.Join(dataDir, "dev-token")
+		if err := writeSecret(tokenFile, dev.Token()); err != nil {
+			return errors.Join(err, app.Stop(context.Background()))
+		}
+		whereToFind = "$(cat " + tokenFile + ")"
+	}
 	fmt.Printf("browser-app listening on http://%s (data in %s)\n", addr, dataDir)
-	fmt.Printf("DEV sign-in: http://%s/dev/login, any username, token %s\n", addr, dev.Token())
-	fmt.Printf("curl -H 'Authorization: Bearer %s' http://%s/v1/sessions\n", dev.Credential("alice"), addr)
+	fmt.Printf("DEV sign-in (development only): http://%s/dev/login, any username, token %s\n", addr, whereToFind)
+	fmt.Printf("curl -H \"Authorization: Bearer alice:%s\" http://%s/v1/sessions\n", whereToFind, addr)
 
 	select {
 	case <-ctx.Done():
@@ -82,6 +93,19 @@ func run() error {
 	// Stop the stack first: it fences new commands and closes browser links
 	// while the listener is still up, then drains the Host.
 	return errors.Join(app.Stop(shutdown), server.Shutdown(shutdown))
+}
+
+// writeSecret writes value to path readable by its owner only.
+func writeSecret(path, value string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) // #nosec G304 -- path is the operator's data directory
+	if err != nil {
+		return err
+	}
+	if err := f.Chmod(0o600); err != nil {
+		return errors.Join(err, f.Close())
+	}
+	_, err = f.WriteString(value + "\n")
+	return errors.Join(err, f.Close())
 }
 
 func envOr(name, fallback string) string {

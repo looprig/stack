@@ -459,3 +459,140 @@ func waitFor(t *testing.T, ctx context.Context, what string, done func() bool) {
 	}
 	t.Fatalf("timed out waiting for %s", what)
 }
+
+// replaySafeAsk is an ask tool that declares it does nothing before asking,
+// so harness keeps its gate open across a restore rather than closing it.
+type replaySafeAsk struct{ scriptedTool }
+
+func (replaySafeAsk) UserInputReplaySafe() bool { return true }
+
+func (r replaySafeAsk) definition() tool.Definition {
+	return tool.NewDefinition(r.name, 0, func(context.Context, tool.Bindings) ([]tool.InvokableTool, error) {
+		return []tool.InvokableTool{r}, nil
+	})
+}
+
+// TestAGateSurvivesStopAndRestartInTheSameProcess: Stop with an agent
+// waiting at a gate abandons that runtime crash-equivalently (reported
+// Abandoned, never Parked, and Stop is clean); a new stack in the SAME
+// process over the same storage restores the session with the gate still
+// open, and answering it there reaches the tool and finishes the turn.
+func TestAGateSurvivesStopAndRestartInTheSameProcess(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	var (
+		mu      sync.Mutex
+		answers []string
+	)
+	ask := replaySafeAsk{scriptedTool{name: "ask", run: func(ctx context.Context) (string, error) {
+		answer, err := loop.RequestUserInput(ctx, "which colour?", nil)
+		if err != nil {
+			return "", err
+		}
+		mu.Lock()
+		answers = append(answers, answer)
+		mu.Unlock()
+		return "the user answered: " + answer, nil
+	}}}
+	client := inferencetest.New(inferencetest.Func(func(req inference.Request) inferencetest.Step {
+		if lastIsToolResult(req) {
+			return inferencetest.Text("thank you")
+		}
+		return inferencetest.ToolCall("ask", `{}`)
+	}).Repeat())
+
+	backend := memory.New()
+	t.Cleanup(func() { _ = backend.Close() })
+	composition := func() stack.Options {
+		o := options(t, backend.Storage(), client)
+		o.Agents = []stack.Agent{toolAgent(client, ask.definition())}
+		// A gated runtime's release is refused for the whole Grace before it
+		// is abandoned; keep the test's drain short.
+		o.Limits.Host.Drain = host.DrainOptions{Grace: time.Second, IdleBoundary: time.Second, PublishBound: time.Second}
+		return o
+	}
+	gates := func(base string, sid sessionwire.SessionID) sessionwire.GatePage {
+		status, body := call(t, ctx, base, http.MethodGet, "/v1/sessions/"+string(sid)+"/gates", "alice", nil)
+		var page sessionwire.GatePage
+		if status != http.StatusOK || page.UnmarshalJSON([]byte(body)) != nil {
+			return sessionwire.GatePage{}
+		}
+		return page
+	}
+
+	first, err := stack.Start(ctx, composition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(first.Handler())
+	sid := sessionwire.SessionID(newID(t))
+	create := sessionwire.CreateRequest{CommandEnvelope: envelope(t), SessionID: sid, AgentID: agentID, Blocks: blocks(t, "ask me")}
+	if status, body := call(t, ctx, server.URL, http.MethodPost, "/v1/sessions", "alice", create); status != http.StatusCreated {
+		t.Fatalf("create = %d %s", status, body)
+	}
+	var opened sessionwire.GateProjection
+	waitFor(t, ctx, "the gate open on the first stack", func() bool {
+		page := gates(server.URL, sid)
+		if len(page.Gates) != 1 || page.Gates[0].Answerability != sessionwire.GateAnswerabilityResident {
+			return false
+		}
+		opened = page.Gates[0]
+		return true
+	})
+
+	if err := first.Stop(ctx); err != nil {
+		t.Fatalf("Stop with a gate open = %v, want a clean crash-equivalent drain", err)
+	}
+	server.Close()
+	report, ok := first.DrainReport()
+	if !ok {
+		t.Fatal("no drain report after Stop")
+	}
+	if len(report.Parked) != 0 {
+		t.Fatalf("Stop parked %v: a leak in a process that keeps running", report.Parked)
+	}
+	if len(report.Abandoned) != 1 || report.Abandoned[0].SessionID != sid {
+		t.Fatalf("Abandoned = %v, want exactly the gated session %s", report.Abandoned, sid)
+	}
+
+	// Same process, same storage: the journal lease was released, so a new
+	// stack can restore the session.
+	second := start(t, ctx, composition())
+	restore := sessionwire.RestoreRequest{CommandEnvelope: envelope(t), SessionID: sid}
+	if status, body := call(t, ctx, second.URL, http.MethodPost, "/v1/sessions/"+string(sid)+"/restore", "alice", restore); status/100 != 2 {
+		t.Fatalf("restore = %d %s", status, body)
+	}
+	var reopened sessionwire.GateProjection
+	waitFor(t, ctx, "the gate answerable on the second stack", func() bool {
+		page := gates(second.URL, sid)
+		if len(page.Gates) != 1 || page.Gates[0].Answerability != sessionwire.GateAnswerabilityResident {
+			return false
+		}
+		reopened = page.Gates[0]
+		return true
+	})
+	if reopened.GateID != opened.GateID {
+		t.Fatalf("the restored gate is %s, want the preserved %s", reopened.GateID, opened.GateID)
+	}
+
+	answer := envelope(t)
+	status, body := call(t, ctx, second.URL, http.MethodPost, "/v1/sessions/"+string(sid)+"/gates/"+string(reopened.GateID), "alice",
+		sessionwire.GateResponseRequest{
+			CommandEnvelope: answer, SessionID: sid, GateID: reopened.GateID, Action: "answer",
+			Values:                 map[string]json.RawMessage{"answer": json.RawMessage(`"` + gateAnswer + `"`)},
+			ExpectedOpenJournalSeq: reopened.OpenedJournalSeq,
+		})
+	if status != http.StatusAccepted {
+		t.Fatalf("gate response on the restored stack = %d %s", status, body)
+	}
+	waitFor(t, ctx, "the answer settled applied", func() bool {
+		status, body := call(t, ctx, second.URL, http.MethodGet, "/v1/sessions/"+string(sid)+"/commands/"+string(answer.CommandID), "alice", nil)
+		return status == http.StatusOK && strings.Contains(body, `"status":"applied"`)
+	})
+	waitForJournal(t, ctx, second.URL, sid, "thank you")
+	mu.Lock()
+	defer mu.Unlock()
+	if len(answers) != 1 || answers[0] != gateAnswer {
+		t.Fatalf("the tool received %v, want exactly [%s]", answers, gateAnswer)
+	}
+}

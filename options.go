@@ -235,8 +235,22 @@ type HostLimits struct {
 	ReconcileInterval time.Duration // 1s
 	ReconcileBatch    int           // 32; at most host.MaxReconcileBatch
 
-	Link  host.LinkOptions  // zero fields: 64 bindings per link, 256 bindings, 4 links per tenant
-	Drain host.DrainOptions // zero fields: grace 10s, idle boundary 5s, publish bound 2s
+	Link host.LinkOptions // zero fields: 64 bindings per link, 256 bindings, 4 links per tenant
+
+	// Drain bounds Stop's drain. Zero fields: grace 10s, idle boundary 5s,
+	// publish bound 2s; IdleBoundary and PublishBound must not exceed Grace.
+	//
+	// SIZE YOUR SHUTDOWN BUDGET ABOVE Grace + 2×IdleBoundary (20s at the
+	// defaults) — the Stop context you pass and the platform's termination
+	// grace (Kubernetes terminationGracePeriodSeconds, systemd
+	// TimeoutStopSec). A session awaiting a gate is never idle, so its
+	// release is refused for the whole Grace; Host then abandons the runtime
+	// crash-equivalently under a fresh IdleBoundary, waited one more if the
+	// abandon ignores cancellation. The gate is preserved and the journal
+	// lease released, so the next Start restores the session with the gate
+	// still answerable (Stack.DrainReport lists it as Abandoned). A shorter
+	// budget kills the process mid-abandon.
+	Drain host.DrainOptions
 
 	CompatibilityTimeout time.Duration // 20s
 	WorkPoll             time.Duration // 1s

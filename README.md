@@ -50,7 +50,7 @@ read the journal, and restart over the same data directory to restore.
 | `Options{Storage, Tenants, Identity, Agents, Hosts, Live, UI, Origins, Logger, AllowDevelopmentIdentity, Limits}` | one composition |
 | `Validate(Options) error` | every refusal that needs no I/O, as `*OptionError{Field, Reason, Cause}` |
 | `Start(ctx, Options) (*Stack, error)` | validate → open storage → `factory.New` → `host.Compose` → start Host → start Factory. **Owns `Storage`**: closes it on failure, and `Stop` closes it last |
-| `(*Stack).Handler / Factory / Host / Stop` | `Stop` runs Factory Quiesce → Host Stop (drain while HostLink is served) → Factory Stop → HostLink listener → stores → `Storage.Close`, on its own lifecycle: the caller's ctx bounds only the wait, storage closes only after every component has finished, and a retried Stop waits for the same teardown |
+| `(*Stack).Handler / Factory / Host / Stop` | `Stop` runs Factory Quiesce → Host Stop (drain while HostLink is served) → Factory Stop → HostLink listener → stores → `Storage.Close`, on its own lifecycle: the caller's ctx bounds only the wait, storage closes only after every component has finished, and a retried Stop waits for the same teardown. A runtime awaiting a gate is abandoned crash-equivalently (gate preserved, journal lease released; `DrainReport().Abandoned`) so the next `Start` — even in the same process — restores it with the gate answerable; a `Parked` runtime is a leak and makes Stop return `*ParkedSessionsError` |
 | `Agent{ID, Compatibility, Capabilities, Define, Decode}` | `Define(ctx, Binding)` builds the rig for every launch; `Binding{Tenant, Session, Journal, WorkspaceRoot, Restore}` |
 | `InProcess{Listen, HostID, Capacity}` / `RemoteHosts{}` | where agents run |
 | `ServeHost(ctx, HostOptions) (*host.Service, http.Handler, error)` | a Host process for `RemoteHosts`, over the same `Storage`, `Tenants` and `Agents`; an explicit `Generation` becomes the floor of the automatic counter |
@@ -73,6 +73,14 @@ create re-presentation and payload-reference refusal hold by construction, and
 Factory stamps the verified principal.
 
 ## Obligations that remain yours
+
+- **Size the shutdown budget above `Drain.Grace` + 2 × `Drain.IdleBoundary`**
+  (20 s at the defaults): both the context you pass to `Stop` and the
+  platform's termination grace (`terminationGracePeriodSeconds`,
+  `TimeoutStopSec`). A session waiting at a gate spends the whole grace
+  having its release refused, then is abandoned under up to two idle
+  boundaries. A shorter budget kills the process mid-abandon; a `Stop` whose
+  context ends early returns and the teardown continues.
 
 - **Sandboxed tools on Linux:** call `sandbox.Init()` as the very first
   statement of `main` if any agent runs commands through

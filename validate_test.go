@@ -81,6 +81,9 @@ func TestValidateAcceptsTheBaselineAndBoundaries(t *testing.T) {
 			o.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 		},
 		"live burst of one frame": func(o *Options) { o.Live = &host.LiveTextOptions{BurstBytes: 4 << 10} },
+		"drain bounds at grace": func(o *Options) {
+			o.Limits.Host.Drain = host.DrainOptions{Grace: time.Second, IdleBoundary: time.Second, PublishBound: time.Second}
+		},
 		"link heartbeat": func(o *Options) {
 			o.Limits.Host.Link.PingInterval, o.Limits.Host.Link.PongTimeout = 2*time.Second, time.Second
 		},
@@ -220,6 +223,12 @@ func TestValidateRefusals(t *testing.T) {
 			o.Limits.Host.Link.PingInterval, o.Limits.Host.Link.PongTimeout = 2*time.Second, 2*time.Second
 		}},
 		{"negative drain grace", "Limits.Host.Drain.Grace", func(o *Options) { o.Limits.Host.Drain.Grace = -1 }},
+		{"idle boundary over grace", "Limits.Host.Drain.IdleBoundary", func(o *Options) {
+			o.Limits.Host.Drain = host.DrainOptions{Grace: time.Second, IdleBoundary: 2 * time.Second}
+		}},
+		{"publish bound over a short grace", "Limits.Host.Drain.PublishBound", func(o *Options) {
+			o.Limits.Host.Drain = host.DrainOptions{Grace: time.Second, IdleBoundary: time.Second} // PublishBound defaults to 2s
+		}},
 		{"negative idle boundary", "Limits.Host.Drain.IdleBoundary", func(o *Options) { o.Limits.Host.Drain.IdleBoundary = -1 }},
 		{"negative publish bound", "Limits.Host.Drain.PublishBound", func(o *Options) { o.Limits.Host.Drain.PublishBound = -1 }},
 		{"negative warm ttl", "Limits.Host.WarmTTL", func(o *Options) { o.Limits.Host.WarmTTL = -1 }},

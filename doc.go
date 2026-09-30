@@ -45,7 +45,9 @@
 //     verified principal (factory.WithPrincipalStamping).
 //   - Stop runs the one safe order, on its own lifecycle (the caller's context
 //     bounds only the wait): Factory Quiesce → Host Stop (drain while
-//     HostLink is still served) → Factory Stop → HostLink listener → stores →
+//     HostLink is still served; a runtime awaiting a gate is abandoned with
+//     its gate preserved, and a Parked one is a *ParkedSessionsError) →
+//     Factory Stop → HostLink listener → stores →
 //     Storage.Close.
 //
 // # Obligations that remain yours

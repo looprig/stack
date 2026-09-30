@@ -395,6 +395,12 @@ func validateHostLimits(field string, raw HostLimits) error {
 	if l.ApplyDeadline < l.ClaimTTL*host.MinClaimAttemptsBeforeDeadline {
 		return refuse(field+".ApplyDeadline", "is "+l.ApplyDeadline.String()+"; it must hold at least "+strconv.Itoa(host.MinClaimAttemptsBeforeDeadline)+" ClaimTTL lifetimes ("+l.ClaimTTL.String()+" each)")
 	}
+	if l.Drain.IdleBoundary > l.Drain.Grace {
+		return refuse(field+".Drain.IdleBoundary", "is "+l.Drain.IdleBoundary.String()+"; it must not exceed Drain.Grace ("+l.Drain.Grace.String()+")")
+	}
+	if l.Drain.PublishBound > l.Drain.Grace {
+		return refuse(field+".Drain.PublishBound", "is "+l.Drain.PublishBound.String()+"; it must not exceed Drain.Grace ("+l.Drain.Grace.String()+")")
+	}
 	if l.CommandQueueSize > host.MaxCommandQueueSize {
 		return refuse(field+".CommandQueueSize", "exceeds host.MaxCommandQueueSize ("+strconv.Itoa(host.MaxCommandQueueSize)+")")
 	}

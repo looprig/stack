@@ -37,6 +37,8 @@ type Stack struct {
 	stopOnce sync.Once
 	stopDone chan struct{} // closed when teardown has finished
 	stopErr  error         // teardown's result, written before stopDone closes
+	drain    host.DrainReport
+	drained  bool
 }
 
 // replicaID names this Factory in every claim it takes.
@@ -52,7 +54,7 @@ const replicaID = "stack"
 // whatever it started and called o.Storage.Close; otherwise Stop closes it,
 // last.
 func Start(ctx context.Context, o Options) (_ *Stack, err error) {
-	s := &Stack{storage: o.Storage, logger: o.Logger}
+	s := &Stack{storage: o.Storage, logger: o.Logger, stopDone: make(chan struct{})}
 	if s.logger == nil {
 		s.logger = slog.New(slog.DiscardHandler)
 	}
@@ -316,7 +318,6 @@ func (s *Stack) Host() *host.Service { return s.host }
 // waits for the same teardown and returns its one result.
 func (s *Stack) Stop(ctx context.Context) error {
 	s.stopOnce.Do(func() {
-		s.stopDone = make(chan struct{})
 		go func() {
 			s.stopErr = s.teardown(context.Background())
 			close(s.stopDone)
@@ -330,6 +331,67 @@ func (s *Stack) Stop(ctx context.Context) error {
 	}
 }
 
+// DrainReport is the in-process Host's final drain report, and whether
+// there is one: false before Stop has finished, under RemoteHosts, or when
+// the Host never started. Abandoned lists sessions given up
+// crash-equivalently with their gates preserved; Parked is a leak (see
+// ParkedSessionsError).
+func (s *Stack) DrainReport() (host.DrainReport, bool) {
+	select {
+	case <-s.stopDone:
+		return s.drain, s.drained
+	default:
+		return host.DrainReport{}, false
+	}
+}
+
+// drainErrors is what a drain report makes Stop return. An abandoned
+// session (a runtime awaiting a gate, given up crash-equivalently with its
+// gate preserved and its lease released) is logged, and its refused release
+// — the idle wait that timed out and the release left in flight — is what
+// led to the abandonment rather than a failure of it. A failed abandon step,
+// any failure of a session that was not abandoned, and every Parked session
+// (a leak: see ParkedSessionsError) are errors.
+func (s *Stack) drainErrors(report host.DrainReport) []error {
+	abandoned := make(map[host.DrainSession]bool, len(report.Abandoned))
+	for _, session := range report.Abandoned {
+		abandoned[session] = true
+		s.logger.Info("stack: a session awaiting a gate was abandoned at Stop; its gate is preserved for the next Start",
+			"tenant_id", session.TenantID, "session_id", session.SessionID)
+	}
+	var errs []error
+	for _, failure := range report.Failures {
+		if failure.Step != stepAbandonResidency && abandoned[host.DrainSession{TenantID: failure.TenantID, SessionID: failure.SessionID}] {
+			s.logger.Debug("stack: an abandoned session's refused release", "error", failure)
+			continue
+		}
+		errs = append(errs, fmt.Errorf("stack: host drain: %w", failure))
+	}
+	if len(report.Parked) != 0 {
+		errs = append(errs, &ParkedSessionsError{Sessions: append([]host.DrainSession(nil), report.Parked...)})
+	}
+	return errs
+}
+
+// stepAbandonResidency is Host's drain step for the crash-equivalent abandon
+// (host/internal/lifecycle.StepAbandonResidency, which Host does not export).
+const stepAbandonResidency = "abandon_residency"
+
+// ParkedSessionsError is a Stop that left runtimes running: their release
+// was refused and they could not be abandoned, so they keep their journal
+// leases until the PROCESS exits. A process that keeps running after Stop
+// cannot restore these sessions and should treat this as a leak (exit, or
+// alert). Every harnessruntime runtime can be abandoned, so under the stack
+// this means an abandon failed or overran its bound (see the drain report's
+// Failures and Drain.IdleBoundary).
+type ParkedSessionsError struct {
+	Sessions []host.DrainSession
+}
+
+func (e *ParkedSessionsError) Error() string {
+	return fmt.Sprintf("stack: %d session runtime(s) are parked and hold their journal leases until the process exits", len(e.Sessions))
+}
+
 // teardown stops every component, waiting for each to finish, and only then
 // closes the stores and Storage.
 func (s *Stack) teardown(ctx context.Context) error {
@@ -340,10 +402,9 @@ func (s *Stack) teardown(ctx context.Context) error {
 	if s.host != nil {
 		if s.hostStarted {
 			report, err := s.host.Stop(ctx)
+			s.drain, s.drained = report, err == nil
 			errs = append(errs, err)
-			for _, failure := range report.Failures {
-				errs = append(errs, fmt.Errorf("stack: host drain: %w", failure))
-			}
+			errs = append(errs, s.drainErrors(report)...)
 		} else {
 			errs = append(errs, s.host.CloseUnstarted(ctx))
 		}

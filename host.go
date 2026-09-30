@@ -209,9 +209,14 @@ func ServeHost(ctx context.Context, o HostOptions) (*host.Service, http.Handler,
 	}
 	generation := o.Generation
 	if generation == 0 {
-		if generation, err = nextGeneration(ctx, o.Storage.Control.KV, o.HostID); err != nil {
-			return nil, nil, err
-		}
+		generation, err = nextGeneration(ctx, o.Storage.Control.KV, o.HostID)
+	} else {
+		// An explicit generation becomes the counter's floor, so a later
+		// automatic start of this HostID continues above it.
+		err = floorGeneration(ctx, o.Storage.Control.KV, o.HostID, generation)
+	}
+	if err != nil {
+		return nil, nil, err
 	}
 	service, err := composeHost(ctx, hostPlan{
 		hostID: o.HostID, base: o.Base, generation: generation, capacity: o.Capacity,

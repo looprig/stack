@@ -256,7 +256,9 @@ type HostOptions struct {
 	// HostID names this Host. REQUIRED.
 	HostID sessionwire.HostID
 	// Generation is this run's incarnation. Zero means the next value of the
-	// counter the stack keeps in Storage.Control for HostID.
+	// counter the stack keeps in Storage.Control for HostID; an explicit value
+	// raises that counter to at least itself, so a later automatic start of
+	// the same HostID continues above it.
 	Generation uint64
 	// Base is the BARE HostLink base Factory dials (scheme and authority,
 	// no path); Factory derives each tenant's address from it. REQUIRED.

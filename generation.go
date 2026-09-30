@@ -32,19 +32,9 @@ const maxGenerationAttempts = 8
 func nextGeneration(ctx context.Context, kv storage.KV, hostID sessionwire.HostID) (uint64, error) {
 	key := generationKey(hostID)
 	for range maxGenerationAttempts {
-		var current, revision uint64
-		value, rev, err := kv.Get(ctx, key)
-		var missing *storage.KeyNotFoundError
-		switch {
-		case errors.As(err, &missing):
-		case err != nil:
-			return 0, fmt.Errorf("stack: read host generation: %w", err)
-		default:
-			current, err = strconv.ParseUint(string(value), 10, 64)
-			if err != nil {
-				return 0, fmt.Errorf("stack: host generation at %s is corrupt: %w", key, err)
-			}
-			revision = rev
+		current, revision, err := readGeneration(ctx, kv, key)
+		if err != nil {
+			return 0, err
 		}
 		next := current + 1
 		if next == 0 {
@@ -61,4 +51,46 @@ func nextGeneration(ctx context.Context, kv storage.KV, hostID sessionwire.HostI
 		return next, nil
 	}
 	return 0, fmt.Errorf("stack: host generation for %q is contended; is another process running with the same HostID?", hostID)
+}
+
+// floorGeneration raises the persisted counter for hostID to at least
+// generation, never lowering it, so an explicitly numbered run is followed by
+// automatic ones above it.
+func floorGeneration(ctx context.Context, kv storage.KV, hostID sessionwire.HostID, generation uint64) error {
+	key := generationKey(hostID)
+	for range maxGenerationAttempts {
+		current, revision, err := readGeneration(ctx, kv, key)
+		if err != nil {
+			return err
+		}
+		if current >= generation {
+			return nil
+		}
+		_, err = kv.Put(ctx, key, revision, []byte(strconv.FormatUint(generation, 10)))
+		var conflict *storage.ConflictError
+		if errors.As(err, &conflict) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("stack: raise host generation: %w", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("stack: host generation for %q is contended; is another process running with the same HostID?", hostID)
+}
+
+// readGeneration reads the counter at key: zero and revision zero when absent.
+func readGeneration(ctx context.Context, kv storage.KV, key string) (current, revision uint64, err error) {
+	value, rev, err := kv.Get(ctx, key)
+	var missing *storage.KeyNotFoundError
+	switch {
+	case errors.As(err, &missing):
+		return 0, 0, nil
+	case err != nil:
+		return 0, 0, fmt.Errorf("stack: read host generation: %w", err)
+	}
+	if current, err = strconv.ParseUint(string(value), 10, 64); err != nil {
+		return 0, 0, fmt.Errorf("stack: host generation at %s is corrupt: %w", key, err)
+	}
+	return current, rev, nil
 }

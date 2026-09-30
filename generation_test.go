@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/looprig/storage"
 	"github.com/looprig/storage/memstore"
@@ -96,5 +97,55 @@ func TestPathSegmentNeverEscapesItsRoot(t *testing.T) {
 		if got := pathSegment(id); got != id {
 			t.Errorf("pathSegment(%q) = %q, want it unchanged", id, got)
 		}
+	}
+}
+
+func TestAnExplicitGenerationIsTheCountersFloor(t *testing.T) {
+	ctx := context.Background()
+	kv := memstore.New().KV
+	if err := floorGeneration(ctx, kv, "h", 100); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := nextGeneration(ctx, kv, "h"); err != nil || got != 101 {
+		t.Fatalf("automatic generation after an explicit 100 = %d, %v; want 101", got, err)
+	}
+	// A lower explicit generation never lowers the counter.
+	if err := floorGeneration(ctx, kv, "h", 7); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := nextGeneration(ctx, kv, "h"); err != nil || got != 102 {
+		t.Fatalf("automatic generation after a lower explicit one = %d, %v; want 102", got, err)
+	}
+	// It retries a racing writer.
+	racy := &conflictOnce{KV: memstore.New().KV}
+	if err := floorGeneration(ctx, racy, "h", 5); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := readGeneration(ctx, racy, generationKey("h")); err != nil || got != 5 {
+		t.Fatalf("floor after a conflict = %d, %v; want 5", got, err)
+	}
+}
+
+// TestServeHostRaisesTheCounterToAnExplicitGeneration: a Host started with an
+// explicit generation leaves the counter there, so the next automatic start
+// of the same HostID advertises above it.
+func TestServeHostRaisesTheCounterToAnExplicitGeneration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	o := validOptions()
+	o.Storage.Workspaces = t.TempDir()
+	service, _, err := ServeHost(ctx, HostOptions{
+		Storage: o.Storage, Tenants: o.Tenants, Agents: o.Agents,
+		HostID: "explicit", Generation: 100, Base: "ws://127.0.0.1:1",
+		Credential: TokenVerifier(strings.Repeat("c", MinHostLinkCredentialBytes)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := nextGeneration(ctx, o.Storage.Control.KV, "explicit"); err != nil || got != 101 {
+		t.Fatalf("the automatic generation after an explicit 100 = %d, %v; want 101", got, err)
 	}
 }

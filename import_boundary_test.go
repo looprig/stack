@@ -147,7 +147,7 @@ var publishedPins = map[string]string{
 	"factory":      "v0.15.0",
 	"fsstore":      "v0.6.0",
 	"harness":      "v0.44.0",
-	"host":         "v0.15.1", // v0.16.0 (harnessruntime) once tagged; see README "Status"
+	"host":         "v0.16.0", // the first with host/harnessruntime
 	"inference":    "v0.15.0",
 	"sessionstore": "v0.14.0",
 	"storage":      "v0.9.0",

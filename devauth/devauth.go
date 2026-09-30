@@ -143,14 +143,19 @@ func (d *Dev) Routes(next http.Handler) http.Handler {
 			http.Redirect(w, r, "/dev/login?failed", http.StatusSeeOther)
 			return
 		}
-		http.SetCookie(w, &http.Cookie{
-			Name: CookieName, Value: d.Credential(user), Path: "/",
+		// Secure only over TLS: a development stack is usually plain HTTP on
+		// localhost, where a Secure cookie would not be sent back.
+		http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure follows the transport; see above
+			Name: CookieName, Value: d.Credential(user), Path: "/", Secure: r.TLS != nil,
 			HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: int(credentialTTL.Seconds()),
 		})
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	})
 	mux.HandleFunc("POST /dev/logout", func(w http.ResponseWriter, r *http.Request) {
-		http.SetCookie(w, &http.Cookie{Name: CookieName, Value: "", Path: "/", MaxAge: -1})
+		http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure follows the transport, as at login
+			Name: CookieName, Value: "", Path: "/", MaxAge: -1, Secure: r.TLS != nil,
+			HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		})
 		http.Redirect(w, r, "/dev/login", http.StatusSeeOther)
 	})
 	mux.Handle("/", next)

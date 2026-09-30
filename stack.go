@@ -35,7 +35,8 @@ type Stack struct {
 	storage  Storage
 	logger   *slog.Logger
 	stopOnce sync.Once
-	stopErr  error
+	stopDone chan struct{} // closed when teardown has finished
+	stopErr  error         // teardown's result, written before stopDone closes
 }
 
 // replicaID names this Factory in every claim it takes.
@@ -71,6 +72,9 @@ func Start(ctx context.Context, o Options) (_ *Stack, err error) {
 	// outlive a cancelled start context, and Stop closes it explicitly.
 	storeCtx := context.WithoutCancel(ctx)
 	backends, journals, err := openJournals(o.Storage, o.Tenants)
+	if err == nil {
+		err = fault("journals")
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -82,8 +86,14 @@ func Start(ctx context.Context, o Options) (_ *Stack, err error) {
 		}
 		s.readers[tenant] = reader
 	}
+	if err := fault("readers"); err != nil {
+		return nil, err
+	}
 	if s.control, err = sessionstore.Open(storeCtx, o.Storage.Control); err != nil {
 		return nil, fmt.Errorf("stack: open control store: %w", err)
+	}
+	if err := fault("control"); err != nil {
+		return nil, err
 	}
 
 	credential := o.Limits.HostLinkCredential
@@ -99,6 +109,9 @@ func Start(ctx context.Context, o Options) (_ *Stack, err error) {
 	if s.factory, err = s.composeFactory(o, credential); err != nil {
 		return nil, err
 	}
+	if err := fault("factory"); err != nil {
+		return nil, err
+	}
 
 	if inProcess {
 		if err := s.startInProcessHost(ctx, o, mode, credential, journals); err != nil {
@@ -108,7 +121,21 @@ func Start(ctx context.Context, o Options) (_ *Stack, err error) {
 	if err := s.factory.Start(ctx); err != nil {
 		return nil, fmt.Errorf("stack: start factory: %w", err)
 	}
+	if err := fault("factory-start"); err != nil {
+		return nil, err
+	}
 	return s, nil
+}
+
+// startFault, when set by an in-package test, fails Start at the named step
+// so every release path is exercised. It is nil in production.
+var startFault func(step string) error
+
+func fault(step string) error {
+	if startFault == nil {
+		return nil
+	}
+	return startFault(step)
 }
 
 func (s *Stack) startInProcessHost(ctx context.Context, o Options, mode InProcess, credential string, journals map[sessionwire.TenantID]*harnessstore.Store) error {
@@ -121,12 +148,18 @@ func (s *Stack) startInProcessHost(ctx context.Context, o Options, mode InProces
 		hostID = "local"
 	}
 	generation, err := nextGeneration(ctx, o.Storage.Control.KV, hostID)
+	if err == nil {
+		err = fault("generation")
+	}
 	if err != nil {
 		return err
 	}
 	var lc net.ListenConfig
 	if s.hostLn, err = lc.Listen(ctx, "tcp", listen); err != nil {
 		return fmt.Errorf("stack: bind the in-process HostLink listener: %w", err)
+	}
+	if err := fault("listen"); err != nil {
+		return err
 	}
 	if s.host, err = composeHost(ctx, hostPlan{
 		hostID: hostID,
@@ -139,13 +172,16 @@ func (s *Stack) startInProcessHost(ctx context.Context, o Options, mode InProces
 	}); err != nil {
 		return err
 	}
+	if err := fault("host-compose"); err != nil {
+		return err
+	}
 	if err := s.host.Start(ctx); err != nil {
 		return fmt.Errorf("stack: start host: %w", err)
 	}
 	s.hostStarted = true
 	s.hostServer = &http.Server{Handler: s.host.Routes(), ReadHeaderTimeout: 5 * time.Second}
 	go func(server *http.Server, ln net.Listener) { _ = server.Serve(ln) }(s.hostServer, s.hostLn)
-	return nil
+	return fault("host-start")
 }
 
 func (s *Stack) composeFactory(o Options, credential string) (*factory.Server, error) {
@@ -270,14 +306,33 @@ func (s *Stack) Host() *host.Service { return s.host }
 // failure: Factory Quiesce (fence new commands, close browser links) → Host
 // Stop (drain while HostLink is still served) → Factory Stop → the HostLink
 // listener → the stores the stack opened → Storage.Close, last. A drain that
-// completed with failures is an error. Stop is idempotent; later calls return
-// the first call's result.
+// completed with failures is an error.
+//
+// THE TEARDOWN RUNS ON ITS OWN LIFECYCLE, NOT ON ctx. The first Stop starts
+// it; ctx bounds only how long this call waits for it. A Stop whose ctx ends
+// first returns an error wrapping ctx.Err() while the teardown continues —
+// storage is never closed under a component still running, such as a
+// command admission Factory's Quiesce is waiting for — and any later Stop
+// waits for the same teardown and returns its one result.
 func (s *Stack) Stop(ctx context.Context) error {
-	s.stopOnce.Do(func() { s.stopErr = s.stop(ctx) })
-	return s.stopErr
+	s.stopOnce.Do(func() {
+		s.stopDone = make(chan struct{})
+		go func() {
+			s.stopErr = s.teardown(context.Background())
+			close(s.stopDone)
+		}()
+	})
+	select {
+	case <-s.stopDone:
+		return s.stopErr
+	case <-ctx.Done():
+		return fmt.Errorf("stack: stop is still in progress (call Stop again to wait for it): %w", ctx.Err())
+	}
 }
 
-func (s *Stack) stop(ctx context.Context) error {
+// teardown stops every component, waiting for each to finish, and only then
+// closes the stores and Storage.
+func (s *Stack) teardown(ctx context.Context) error {
 	var errs []error
 	if s.factory != nil {
 		errs = append(errs, s.factory.Quiesce(ctx))

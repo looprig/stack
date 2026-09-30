@@ -159,7 +159,8 @@ func TestStartCreatesAppliesInputAndRestoresAfterRestart(t *testing.T) {
 	}
 	first.stop(t)
 
-	second := start(t, ctx, options(t, backend.Storage(), echoModel()))
+	restored := echoModel()
+	second := start(t, ctx, options(t, backend.Storage(), restored))
 	input = sessionwire.InputRequest{CommandEnvelope: envelope(t), SessionID: sid, Blocks: blocks(t, "after restart")}
 	if status, body := call(t, ctx, second.URL, http.MethodPost, "/v1/sessions/"+string(sid)+"/input", "alice", input); status/100 != 2 {
 		t.Fatalf("input after restart = %d %s", status, body)
@@ -167,6 +168,25 @@ func TestStartCreatesAppliesInputAndRestoresAfterRestart(t *testing.T) {
 	journal = waitForJournal(t, ctx, second.URL, sid, "echo: after restart")
 	if !strings.Contains(journal, "echo: first message") {
 		t.Errorf("restored journal lost the first turn:\n%s", journal)
+	}
+	// The restored runtime REPLAYED the conversation: the new process's first
+	// model request carries both earlier turns, in order, before the new one.
+	requests := restored.Requests()
+	if len(requests) == 0 {
+		t.Fatal("the restored runtime made no model request")
+	}
+	sent, err := json.Marshal(requests[0].Messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := []string{"first message", "echo: first message", "second message", "echo: second message", "after restart"}
+	at := 0
+	for _, want := range order {
+		i := strings.Index(string(sent[at:]), want)
+		if i < 0 {
+			t.Fatalf("the restored model request does not replay %q in order: %s", want, sent)
+		}
+		at += i + len(want)
 	}
 }
 
@@ -439,4 +459,90 @@ func newID(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return id.String()
+}
+
+// blockingIndex parks the next OrderedIndex.Create once armed: a command
+// admission writes its inbox record through it, so an armed index holds one
+// admission inside Factory.
+type blockingIndex struct {
+	storage.OrderedIndex
+	armed   atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingIndex) Create(ctx context.Context, id storage.OrderedID, scope string, value []byte, rank storage.Rank, due storage.Due) (storage.OrderedRecord, bool, error) {
+	if b.armed.CompareAndSwap(true, false) {
+		close(b.entered)
+		<-b.release
+	}
+	return b.OrderedIndex.Create(ctx, id, scope, value, rank, due)
+}
+
+// TestACancelledStopNeverClosesStorageUnderARunningComponent: a Stop whose
+// context ends while a command admission is still inside Factory returns
+// the context error and closes nothing; once the admission finishes, a
+// retried Stop completes the whole teardown and closes storage exactly once.
+func TestACancelledStopNeverClosesStorageUnderARunningComponent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	backend := memory.New()
+	t.Cleanup(func() { _ = backend.Close() })
+	store := backend.Storage()
+	control := *store.Control
+	index := &blockingIndex{OrderedIndex: control.OrderedIndex, entered: make(chan struct{}), release: make(chan struct{})}
+	control.OrderedIndex = index
+	store.Control = &control
+	var closes atomic.Int64
+	store.Close = func() error { closes.Add(1); return nil }
+
+	s, err := stack.Start(ctx, options(t, store, echoModel()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(s.Handler())
+	defer server.Close()
+	sid := sessionwire.SessionID(newID(t))
+	create := sessionwire.CreateRequest{CommandEnvelope: envelope(t), SessionID: sid, AgentID: agentID, Blocks: blocks(t, "hello")}
+	if status, body := call(t, ctx, server.URL, http.MethodPost, "/v1/sessions", "alice", create); status != http.StatusCreated {
+		t.Fatalf("create = %d %s", status, body)
+	}
+	waitForJournal(t, ctx, server.URL, sid, "echo: hello")
+
+	index.armed.Store(true)
+	admitted := make(chan int, 1)
+	go func() {
+		input := sessionwire.InputRequest{CommandEnvelope: envelope(t), SessionID: sid, Blocks: blocks(t, "held")}
+		status, _ := call(t, ctx, server.URL, http.MethodPost, "/v1/sessions/"+string(sid)+"/input", "alice", input)
+		admitted <- status
+	}()
+	select {
+	case <-index.entered:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the input admission never reached the control store's inbox")
+	}
+
+	short, shortCancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	err = s.Stop(short)
+	shortCancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Stop under a held admission = %v, want the caller's deadline", err)
+	}
+	if closes.Load() != 0 {
+		t.Fatal("Storage.Close ran while an admission was still inside Factory")
+	}
+
+	close(index.release)
+	if status := <-admitted; status/100 != 2 {
+		t.Errorf("the held admission answered %d", status)
+	}
+	if err := s.Stop(ctx); err != nil {
+		t.Fatalf("retried Stop = %v, want the teardown to complete cleanly", err)
+	}
+	if closes.Load() != 1 {
+		t.Fatalf("Storage.Close ran %d times, want once", closes.Load())
+	}
+	if err := s.Stop(ctx); err != nil {
+		t.Fatalf("a third Stop = %v, want the same clean result", err)
+	}
 }

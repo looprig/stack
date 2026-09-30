@@ -32,7 +32,8 @@ s, err := stack.Start(ctx, stack.Options{
     Live:    &host.LiveTextOptions{IncludeReasoning: true, IncludeToolSteps: true},
     UI:      dev.Routes(myUI),
     Origins: []string{"http://localhost:8080"},
-    Logger:  logger,
+    Logger:  logger,                     // devauth needs one enabled at WARN
+    AllowDevelopmentIdentity: true,      // the explicit opt-in devauth requires
 })
 // serve s.Handler(); on shutdown: s.Stop(ctx) before closing your listener.
 ```
@@ -46,17 +47,17 @@ read the journal, and restart over the same data directory to restore.
 
 | | |
 |---|---|
-| `Options{Storage, Tenants, Identity, Agents, Hosts, Live, UI, Origins, Logger, Limits}` | one composition |
+| `Options{Storage, Tenants, Identity, Agents, Hosts, Live, UI, Origins, Logger, AllowDevelopmentIdentity, Limits}` | one composition |
 | `Validate(Options) error` | every refusal that needs no I/O, as `*OptionError{Field, Reason, Cause}` |
 | `Start(ctx, Options) (*Stack, error)` | validate → open storage → `factory.New` → `host.Compose` → start Host → start Factory. **Owns `Storage`**: closes it on failure, and `Stop` closes it last |
-| `(*Stack).Handler / Factory / Host / Stop` | `Stop` runs Factory Quiesce → Host Stop (drain while HostLink is served) → Factory Stop → HostLink listener → stores → `Storage.Close` |
+| `(*Stack).Handler / Factory / Host / Stop` | `Stop` runs Factory Quiesce → Host Stop (drain while HostLink is served) → Factory Stop → HostLink listener → stores → `Storage.Close`, on its own lifecycle: the caller's ctx bounds only the wait, storage closes only after every component has finished, and a retried Stop waits for the same teardown |
 | `Agent{ID, Compatibility, Capabilities, Define, Decode}` | `Define(ctx, Binding)` builds the rig for every launch; `Binding{Tenant, Session, Journal, WorkspaceRoot, Restore}` |
 | `InProcess{Listen, HostID, Capacity}` / `RemoteHosts{}` | where agents run |
-| `ServeHost(ctx, HostOptions) (*host.Service, http.Handler, error)` | a Host process for `RemoteHosts`, over the same `Storage`, `Tenants` and `Agents` |
+| `ServeHost(ctx, HostOptions) (*host.Service, http.Handler, error)` | a Host process for `RemoteHosts`, over the same `Storage`, `Tenants` and `Agents`; an explicit `Generation` becomes the floor of the automatic counter |
 | `TokenVerifier(token)` | the Host side of `Limits.HostLinkCredential` |
 | `stack/localdisk` | `Open(dir)`: `<dir>/control`, `<dir>/journal/<tenant>`, `<dir>/workspaces`; bounded blob readers; `*LegacyDataDirError` wraps `fsstore.ErrLegacyLayout` ("move or delete", never retried); single-process only |
 | `stack/memory` | `New()` backend with shareable `Storage()` handles, `Open()` for one use; tests only |
-| `stack/devauth` | **development-only** `"<user>:<token>"` identity, login form, per-process CSRF key; refuses to start without a `Logger` and logs a banner |
+| `stack/devauth` | **development-only** `"<user>:<token>"` identity, login form, per-process CSRF key; refused unless `Options.AllowDevelopmentIdentity` is set and `Options.Logger` is enabled at WARN; logs a banner on every start |
 
 ## What the stack fixes
 

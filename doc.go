@@ -12,7 +12,8 @@
 //	        Define: defineRig, // rig.WithSessionStore(binding.Journal), ...
 //	    }},
 //	    Origins: []string{"http://localhost:8080"},
-//	    Logger:  logger,
+//	    Logger:  logger,                // enabled at WARN: devauth's banner
+//	    AllowDevelopmentIdentity: true, // the explicit devauth opt-in
 //	})
 //	defer s.Stop(shutdownCtx)
 //	http.ListenAndServe(addr, s.Handler())
@@ -42,7 +43,8 @@
 //     first message re-presented, and an unresolved payload reference refused
 //     (Host resolves referenced bodies before the attempt). Factory stamps the
 //     verified principal (factory.WithPrincipalStamping).
-//   - Stop runs the one safe order: Factory Quiesce → Host Stop (drain while
+//   - Stop runs the one safe order, on its own lifecycle (the caller's context
+//     bounds only the wait): Factory Quiesce → Host Stop (drain while
 //     HostLink is still served) → Factory Stop → HostLink listener → stores →
 //     Storage.Close.
 //

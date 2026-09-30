@@ -28,6 +28,12 @@ cannot live in either.
   `host.Compose` both run before anything is served.
 - `Stop` order is fixed: Quiesce → Host Stop → Factory Stop → HostLink
   listener → stores → `Storage.Close`. `TestStopRunsTheSafeOrder` holds it.
+  Teardown runs on its own lifecycle; a caller's context bounds only its
+  wait, and storage never closes under a running component
+  (`TestACancelledStopNeverClosesStorageUnderARunningComponent`).
+- Every Start step's failure releases everything
+  (`TestEveryStartStepReleasesEverything`, via the in-package `startFault`
+  hook — add a `fault` call for any new step).
 - The journal binding, templates, evidence router and resolvers derive from
   one source. Do not add an option that lets two of them disagree.
 - `devauth` stays loudly development-only: `Identity.DevelopmentOnly`

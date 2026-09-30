@@ -3,6 +3,7 @@ module github.com/looprig/stack
 go 1.26.8
 
 require (
+	github.com/centrifugal/centrifuge-go v0.12.0
 	github.com/looprig/core v0.13.1
 	github.com/looprig/factory v0.15.0
 	github.com/looprig/fsstore v0.6.0
@@ -17,7 +18,6 @@ require (
 	github.com/FZambia/eagle v0.2.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/centrifugal/centrifuge v0.38.0 // indirect
-	github.com/centrifugal/centrifuge-go v0.12.0 // indirect
 	github.com/centrifugal/protocol v0.19.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dolthub/maphash v0.1.0 // indirect

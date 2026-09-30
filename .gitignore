@@ -1,0 +1,11 @@
+# Go build/test artifacts
+/bin/
+*.out
+*.test
+coverage.txt
+
+# The example's default data directory.
+/examples/browser-app/data/
+
+# Editor/OS cruft
+.DS_Store

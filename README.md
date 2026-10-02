@@ -11,6 +11,13 @@ derived from one place.
 go get github.com/looprig/stack@latest
 ```
 
+`v0.1.1` is a dependency-only patch: Factory v0.16.0, Host v0.18.0,
+harness v0.45.1 and SessionStore v0.15.0, with centrifuge-go v0.12.1
+and centrifuge v0.39.3 selected by MVS. Factory v0.16.0 fixes the
+HostLink reconnect race during `Stop` exposed by the centrifuge upgrade.
+The exported Stack API is unchanged; upgrade these pins together rather
+than pairing the centrifuge upgrade with an older Factory.
+
 ## Use
 
 ```go

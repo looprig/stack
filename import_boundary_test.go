@@ -144,12 +144,12 @@ func TestModuleImportsStayWithinBoundary(t *testing.T) {
 // must exist on its module's remote before it is named here.
 var publishedPins = map[string]string{
 	"core":         "v0.13.1",
-	"factory":      "v0.15.0",
+	"factory":      "v0.16.0",
 	"fsstore":      "v0.6.0",
-	"harness":      "v0.45.0",
-	"host":         "v0.17.0", // abandons a gate-waiting runtime at drain
+	"harness":      "v0.45.1",
+	"host":         "v0.18.0", // abandons a gate-waiting runtime at drain
 	"inference":    "v0.15.0",
-	"sessionstore": "v0.14.0",
+	"sessionstore": "v0.15.0",
 	"storage":      "v0.9.0",
 }
 

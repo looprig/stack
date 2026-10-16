@@ -43,5 +43,5 @@ cannot live in either.
 ## Testing
 
 - Red-green-refactor; mutation-test any guard that matters.
-- `GOWORK=off GOTOOLCHAIN=go1.26.8 make check` before committing, plus
+- `GOWORK=off GOTOOLCHAIN=go1.26.9 make check` before committing, plus
   `git diff --check`.

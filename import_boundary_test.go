@@ -143,14 +143,14 @@ func TestModuleImportsStayWithinBoundary(t *testing.T) {
 // publishedPins are the exact looprig versions this module names. A version
 // must exist on its module's remote before it is named here.
 var publishedPins = map[string]string{
-	"core":         "v0.13.1",
-	"factory":      "v0.16.0",
-	"fsstore":      "v0.6.0",
-	"harness":      "v0.45.1",
-	"host":         "v0.18.0", // abandons a gate-waiting runtime at drain
-	"inference":    "v0.15.0",
-	"sessionstore": "v0.15.0",
-	"storage":      "v0.9.0",
+	"core":         "v0.13.2",
+	"factory":      "v0.16.1",
+	"fsstore":      "v0.6.2",
+	"harness":      "v0.45.2",
+	"host":         "v0.18.1", // abandons a gate-waiting runtime at drain
+	"inference":    "v0.15.2",
+	"sessionstore": "v0.15.1",
+	"storage":      "v0.9.1",
 }
 
 func TestModuleContract(t *testing.T) {
@@ -172,8 +172,8 @@ func TestModuleContract(t *testing.T) {
 			}
 		case "go":
 			sawGo = true
-			if len(fields) < 2 || fields[1] != "1.26.8" {
-				t.Errorf("go directive = %q, want 1.26.8", line)
+			if len(fields) < 2 || fields[1] != "1.26.9" {
+				t.Errorf("go directive = %q, want 1.26.9", line)
 			}
 		case "toolchain", "replace":
 			t.Errorf("go.mod must not carry a %s directive: %q", fields[0], line)

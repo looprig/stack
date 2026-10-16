@@ -14,7 +14,7 @@ GO := GOWORK=$(GOWORK) go
 
 # Resolve gofmt from the module's Go baseline instead of trusting the default
 # formatter on PATH. The same pinned version is selected by setup-go in CI.
-GOFMT := $(shell GOTOOLCHAIN=go1.26.8 $(GO) env GOROOT)/bin/gofmt
+GOFMT := $(shell GOTOOLCHAIN=go1.26.9 $(GO) env GOROOT)/bin/gofmt
 
 # PIPEFAIL is stated in each piping recipe rather than inherited from
 # .SHELLFLAGS: macOS ships GNU make 3.81, which ignores .SHELLFLAGS silently,
@@ -45,7 +45,7 @@ gosec:
 
 vuln:
 	$(GO) mod verify
-	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
 secure: fmt-check vet staticcheck gosec vuln
 

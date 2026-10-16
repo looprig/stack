@@ -1,17 +1,17 @@
 module github.com/looprig/stack
 
-go 1.26.8
+go 1.26.9
 
 require (
 	github.com/centrifugal/centrifuge-go v0.12.1
-	github.com/looprig/core v0.13.1
-	github.com/looprig/factory v0.16.0
-	github.com/looprig/fsstore v0.6.0
-	github.com/looprig/harness v0.45.1
-	github.com/looprig/host v0.18.0
-	github.com/looprig/inference v0.15.0
-	github.com/looprig/sessionstore v0.15.0
-	github.com/looprig/storage v0.9.0
+	github.com/looprig/core v0.13.2
+	github.com/looprig/factory v0.16.1
+	github.com/looprig/fsstore v0.6.2
+	github.com/looprig/harness v0.45.2
+	github.com/looprig/host v0.18.1
+	github.com/looprig/inference v0.15.2
+	github.com/looprig/sessionstore v0.15.1
+	github.com/looprig/storage v0.9.1
 )
 
 require (
@@ -41,7 +41,7 @@ require (
 	github.com/stretchr/testify v1.12.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/sync v0.23.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )

@@ -125,7 +125,7 @@ fsstore and only `memory` imports memstore.
 ## Verify
 
 ```sh
-GOWORK=off GOTOOLCHAIN=go1.26.8 make check
+GOWORK=off GOTOOLCHAIN=go1.26.9 make check
 ```
 
 Apache-2.0.
